@@ -8,8 +8,10 @@ import hashlib
 import stat
 import subprocess
 
-PACKAGER_VERSION = "v2.3.1"
-PACKAGER_SHA256 = "40c28ec61b19ce6cba7051580d14e6ee6e8c8a42a364396788cc4876e55ceaec"
+PACKAGER_VERSION = "v2.4.1"
+
+# curl https://raw.githubusercontent.com/BigWigsMods/packager/refs/tags/v2.4.1/release.sh | sha256sum
+PACKAGER_SHA256 = "d268e52a2fb432307d0aeaeaead4d6069eb68ab42b5e64c2e117368e17e380fa"
 
 def get_sha256(path: Path) -> str:
     h = hashlib.sha256()
