@@ -8,6 +8,20 @@ import hashlib
 import stat
 import subprocess
 
+# ANSI color codes
+class Colors:
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    RESET = '\033[0m'
+
+def colored(text, *styles):
+    """Apply color/style to text using ANSI codes."""
+    prefix = ''.join(styles)
+    return f"{prefix}{text}{Colors.RESET}" if prefix else text
+
 PACKAGER_VERSION = "v2.4.2"
 
 # curl https://raw.githubusercontent.com/BigWigsMods/packager/refs/tags/v2.4.2/release.sh | sha256sum
@@ -105,12 +119,12 @@ def main():
     # Validate WOW_HOME environment
     wow_home_str = os.environ.get("WOW_HOME")
     if not wow_home_str:
-        print("Error: WOW_HOME environment variable not set. Please set it to your World of Warcraft installation directory.")
+        print(colored("Error: WOW_HOME environment variable not set. Please set it to your World of Warcraft installation directory.", Colors.RED))
         return 1
 
     wow_home = Path(wow_home_str)
     if not wow_home.exists():
-        print(f'Error: World of Warcraft directory "{wow_home.absolute()}" not found.')
+        print(colored(f'Error: World of Warcraft directory "{wow_home.absolute()}" not found.', Colors.RED))
         return 1
 
     # setup the working directory
@@ -137,15 +151,25 @@ def main():
     ])
 
     if packager_result.returncode != 0:
-        print(f"Packager execution failed with return code {packager_result.returncode}")
+        print(colored(f"Error: Packager execution failed with return code {packager_result.returncode}", Colors.RED))
         return 1
 
-    # copy files to the output directories
-    print("Copying files...", end="\n\n")
+    # deploy addons to the output directories
+    print(colored("Deploying addons...", Colors.BOLD) + "\n")
 
-    for target_dir in get_target_dirs(wow_home, args.flavor, args.channel):
-        for d in [f for f in os.scandir(release_dir) if f.is_dir()]:
-            print(f"- Copying {d.name} to {target_dir}...", end='\r')
+    target_dirs = list(get_target_dirs(wow_home, args.flavor, args.channel))
+    addon_dirs = [f for f in os.scandir(release_dir) if f.is_dir()]
+    
+    for i, target_dir in enumerate(target_dirs, 1):
+        # Extract just the target name from the path (e.g., "retail" from "/_retail_/Interface/AddOns")
+        target_name = target_dir.parent.parent.name.strip('_')
+        counter = colored(f"[{i}/{len(target_dirs)}]", Colors.CYAN)
+        target_header = colored(target_name, Colors.BLUE, Colors.BOLD)
+        print(f"{counter} {target_header}:")
+        
+        for j, d in enumerate(addon_dirs, 1):
+            addon_counter = colored(f"[{j}/{len(addon_dirs)}]", Colors.CYAN)
+            print(f"  {addon_counter} {d.name}...", end=" ")
 
             dest_addon_dir = target_dir / d.name
             
@@ -156,11 +180,11 @@ def main():
             # Copy the addon directory
             shutil.copytree(d.path, dest_addon_dir)
 
-            print(f"- Copied {d.name} to {target_dir}    ")
-
+            print(colored("✓", Colors.GREEN))
+        
         print()
 
-    print("Copying complete.")
+    print(colored("Deployment complete!", Colors.GREEN, Colors.BOLD))
 
 if __name__ == "__main__":
     main()
