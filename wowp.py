@@ -147,17 +147,14 @@ def main():
         for d in [f for f in os.scandir(release_dir) if f.is_dir()]:
             print(f"- Copying {d.name} to {target_dir}...", end='\r')
 
-            rsync_result = subprocess.run([
-                "rsync",
-                "-a",
-                "--delete",
-                d.path,
-                target_dir
-            ])
-
-            if rsync_result.returncode != 0:
-                print(f"rsync to {target_dir} failed with error code {rsync_result.returncode}")
-                return 1
+            dest_addon_dir = target_dir / d.name
+            
+            # Remove existing addon directory if it exists (equivalent to rsync --delete)
+            if dest_addon_dir.exists():
+                shutil.rmtree(dest_addon_dir)
+            
+            # Copy the addon directory
+            shutil.copytree(d.path, dest_addon_dir)
 
             print(f"- Copied {d.name} to {target_dir}    ")
 
