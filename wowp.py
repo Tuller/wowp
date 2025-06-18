@@ -8,10 +8,49 @@ import hashlib
 import stat
 import subprocess
 
-PACKAGER_VERSION = "v2.4.1"
+# ANSI color codes and utilities
+from enum import Enum
+import sys
 
-# curl https://raw.githubusercontent.com/BigWigsMods/packager/refs/tags/v2.4.1/release.sh | sha256sum
-PACKAGER_SHA256 = "d268e52a2fb432307d0aeaeaead4d6069eb68ab42b5e64c2e117368e17e380fa"
+class Color(Enum):
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    RESET = '\033[0m'
+
+def colorize(text, *styles):
+    """Apply color/style to text using ANSI codes."""
+    if not sys.stdout.isatty():  # Don't colorize if output is redirected
+        return text
+    
+    codes = [style.value if isinstance(style, Color) else style for style in styles]
+    return f"{''.join(codes)}{text}{Color.RESET.value}" if codes else text
+
+# Semantic color helpers
+def error(text): return colorize(text, Color.RED)
+def success(text): return colorize(text, Color.GREEN, Color.BOLD)
+def header(text): return colorize(text, Color.BLUE, Color.BOLD)
+def counter(text): return colorize(text, Color.CYAN)
+def checkmark(): return colorize("✓", Color.GREEN)
+
+PACKAGER_VERSION = "v2.4.2"
+
+# curl https://raw.githubusercontent.com/BigWigsMods/packager/refs/tags/v2.4.2/release.sh | sha256sum
+PACKAGER_SHA256 = "37c259ef699fc1cd816d5d1839a4c4773a6418f627f7bf27cd5cfefe1b682e2c"
+
+# Mapping of (flavor, channel) combinations to target directory names
+TARGET_MAP = {
+    ('mainline', 'live'): ['retail'],
+    ('mainline', 'ptr'): ['ptr', 'xptr'],
+    ('mainline', 'beta'): ['beta'],
+    ('mainline', 'alpha'): ['alpha'],
+    ('classic', 'live'): ['classic', 'classic_era'],
+    ('classic', 'ptr'): ['classic_ptr', 'classic_era_ptr'],
+    ('classic', 'beta'): ['classic_beta', 'classic_era_beta'],
+    ('classic', 'alpha'): ['classic_alpha', 'classic_era_alpha'],
+}
 
 def get_sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -46,131 +85,60 @@ def download_packager(working_dir: Path) -> Path:
 def parse_args():
     parser = argparse.ArgumentParser(description="WoW Publisher")
 
-    # Define mutually exclusive groups for flavor and channel
-    flavors = parser.add_argument_group()
-    flavors.add_argument('--flavor', choices=['mainline', 'classic'], nargs='+')
-    flavors.add_argument('--retail', action='append_const', const='mainline', dest='flavor')
-    flavors.add_argument('--main', action='append_const', const='mainline', dest='flavor')
-    flavors.add_argument('--mainline', action='append_const', const='mainline', dest='flavor')
-    flavors.add_argument('--classic', action='append_const', const='classic', dest='flavor')
+    parser.add_argument('--flavor', choices=['mainline', 'classic'], nargs='+',
+                       help='Target WoW flavors (default: mainline classic)')
+    parser.add_argument('--channel', choices=['live', 'ptr', 'beta', 'alpha'], nargs='+',
+                       help='Target release channels (default: live)')
+    
+    # Convenience flags
+    parser.add_argument('--retail', '--mainline', action='append_const', const='mainline', dest='flavor')
+    parser.add_argument('--classic', action='append_const', const='classic', dest='flavor')
+    parser.add_argument('--live', action='append_const', const='live', dest='channel')
+    parser.add_argument('--ptr', action='append_const', const='ptr', dest='channel')
+    parser.add_argument('--beta', action='append_const', const='beta', dest='channel')
+    parser.add_argument('--alpha', action='append_const', const='alpha', dest='channel')
 
-    channels = parser.add_argument_group()
-    channels.add_argument('--channel', choices=['live', 'ptr', 'beta', 'alpha'], nargs='+')
-    channels.add_argument('--live', action='append_const', const='live', dest='channel')
-    channels.add_argument('--ptr', action='append_const', const='ptr', dest='channel')
-    channels.add_argument('--beta', action='append_const', const='beta', dest='channel')
-    channels.add_argument('--alpha', action='append_const', const='alpha', dest='channel')
+    args = parser.parse_args()
+    
+    # Apply defaults if no flags were used
+    if not args.flavor:
+        args.flavor = ['mainline', 'classic']
+    if not args.channel:
+        args.channel = ['live']
+    
+    # Remove duplicates while preserving order
+    args.flavor = list(dict.fromkeys(args.flavor))
+    args.channel = list(dict.fromkeys(args.channel))
+    
+    return args
 
-    return parser.parse_args()
-
-def get_target_dirs():
-    args = parse_args()
-
-    flavors = args.flavor
-    if not flavors:
-        flavors = ['mainline', 'classic']
-
-    channels = args.channel
-    if not channels:
-        channels = ['live']
-
-    if not os.environ["WOW_HOME"]:
-        raise Exception("The World of Warcraft home directory environment variable has not yet been set. Please set it to the World of Warcraft install directory")
-
-    wow_home = Path(os.environ["WOW_HOME"])
-    if not wow_home.exists():
-        raise Exception(f'The World of Warcraft home directory "{wow_home.absolute()}" could not be read')
-
-    # compute addon directory targets
-    targets: set[str] = set()
-    if "mainline" in flavors:
-        if "live" in channels:
-            targets.add("retail")
-
-        if "ptr" in channels:
-            targets.add("ptr")
-            targets.add("xptr")
-
-        if "beta" in channels:
-            targets.add("beta")
-
-        if "alpha" in channels:
-            targets.add("alpha")
-
-    if "classic" in flavors:
-        if "live" in channels:
-            targets.add("classic")
-            targets.add("classic_era")
-
-        if "ptr" in channels:
-            targets.add("classic_ptr")
-            targets.add("classic_era_ptr")
-
-        if "beta" in channels:
-            targets.add("classic_beta")
-            targets.add("classic_era_beta")
-
-        if "alpha" in channels:
-            targets.add("classic_alpha")
-            targets.add("classic_era_alpha")
-
-    for t in targets:
-        target_dir = wow_home.joinpath(f"_{t}_", "Interface", "AddOns")
+def get_target_dirs(wow_home, flavors, channels):
+    """Get target directories based on flavors and channels."""
+    targets = set()
+    
+    for flavor in flavors:
+        for channel in channels:
+            if (flavor, channel) in TARGET_MAP:
+                targets.update(TARGET_MAP[(flavor, channel)])
+    
+    for target in targets:
+        target_dir = wow_home.joinpath(f"_{target}_", "Interface", "AddOns")
         if target_dir.exists():
             yield target_dir
 
 def main():
     args = parse_args()
 
-    flavors = args.flavor
-    if not flavors:
-        flavors = ['mainline', 'classic']
-
-    channels = args.channel
-    if not channels:
-        channels = ['live']
-
-    if not os.environ["WOW_HOME"]:
-        print("The World of Warcraft home directory environment variable has not yet been set. Please set it to the World of Warcraft install directory")
+    # Validate WOW_HOME environment
+    wow_home_str = os.environ.get("WOW_HOME")
+    if not wow_home_str:
+        print(error("WOW_HOME environment variable not set. Please set it to your World of Warcraft installation directory."))
         return 1
 
-    wow_home = Path(os.environ["WOW_HOME"])
+    wow_home = Path(wow_home_str)
     if not wow_home.exists():
-        print(f'The World of Warcraft home directory, "{wow_home.absolute()}" could not be read')
+        print(error(f'World of Warcraft directory "{wow_home.absolute()}" not found.'))
         return 1
-
-    # compute addon directory targets
-    target_dirs: set[str] = set()
-    if "mainline" in flavors:
-        if "live" in channels:
-            target_dirs.add("retail")
-
-        if "ptr" in channels:
-            target_dirs.add("ptr")
-            target_dirs.add("xptr")
-
-        if "beta" in channels:
-            target_dirs.add("beta")
-
-        if "alpha" in channels:
-            target_dirs.add("alpha")
-
-    if "classic" in flavors:
-        if "live" in channels:
-            target_dirs.add("classic")
-            target_dirs.add("classic_era")
-
-        if "ptr" in channels:
-            target_dirs.add("classic_ptr")
-            target_dirs.add("classic_era_ptr")
-
-        if "beta" in channels:
-            target_dirs.add("classic_beta")
-            target_dirs.add("classic_era_beta")
-
-        if "alpha" in channels:
-            target_dirs.add("classic_alpha")
-            target_dirs.add("classic_era_alpha")
 
     # setup the working directory
     working_dir = Path("/tmp/wowp")
@@ -196,33 +164,37 @@ def main():
     ])
 
     if packager_result.returncode != 0:
-        print(f"Packager execution failed with return code {packager_result.returncode}")
+        print(error(f"Packager execution failed with return code {packager_result.returncode}"))
         return 1
 
-    # copy files to the output directories
-    print("Copying files...", end="\n\n")
+    # deploy addons to the output directories
+    print(colorize("Deploying addons...", Color.BOLD) + "\n")
 
-    for target_dir in get_target_dirs():
-        for d in [f for f in os.scandir(release_dir) if f.is_dir()]:
-            print(f"- Copying {d.name} to {target_dir}...", end='\r')
+    target_dirs = list(get_target_dirs(wow_home, args.flavor, args.channel))
+    addon_dirs = [f for f in os.scandir(release_dir) if f.is_dir()]
+    
+    for i, target_dir in enumerate(target_dirs, 1):
+        # Extract just the target name from the path (e.g., "retail" from "/_retail_/Interface/AddOns")
+        target_name = target_dir.parent.parent.name.strip('_')
+        print(f"{counter(f'[{i}/{len(target_dirs)}]')} {header(target_name)}:")
+        
+        for j, d in enumerate(addon_dirs, 1):
+            print(f"  {counter(f'[{j}/{len(addon_dirs)}]')} {d.name}...", end=" ")
 
-            rsync_result = subprocess.run([
-                "rsync",
-                "-a",
-                "--delete",
-                d.path,
-                target_dir
-            ])
+            dest_addon_dir = target_dir / d.name
+            
+            # Remove existing addon directory if it exists (equivalent to rsync --delete)
+            if dest_addon_dir.exists():
+                shutil.rmtree(dest_addon_dir)
+            
+            # Copy the addon directory
+            shutil.copytree(d.path, dest_addon_dir)
 
-            if rsync_result.returncode != 0:
-                print(f"rsync to {target_dir} failed with error code {rsync_result.returncode}")
-                return 1
-
-            print(f"- Copied {d.name} to {target_dir}    ")
-
+            print(checkmark())
+        
         print()
 
-    print("Copying complete.")
+    print(success("Deployment complete!"))
 
 if __name__ == "__main__":
     main()
