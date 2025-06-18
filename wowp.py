@@ -58,22 +58,32 @@ def download_packager(working_dir: Path) -> Path:
 def parse_args():
     parser = argparse.ArgumentParser(description="WoW Publisher")
 
-    # Define mutually exclusive groups for flavor and channel
-    flavors = parser.add_argument_group()
-    flavors.add_argument('--flavor', choices=['mainline', 'classic'], nargs='+')
-    flavors.add_argument('--retail', action='append_const', const='mainline', dest='flavor')
-    flavors.add_argument('--main', action='append_const', const='mainline', dest='flavor')
-    flavors.add_argument('--mainline', action='append_const', const='mainline', dest='flavor')
-    flavors.add_argument('--classic', action='append_const', const='classic', dest='flavor')
+    parser.add_argument('--flavor', choices=['mainline', 'classic'], nargs='+',
+                       help='Target WoW flavors (default: mainline classic)')
+    parser.add_argument('--channel', choices=['live', 'ptr', 'beta', 'alpha'], nargs='+',
+                       help='Target release channels (default: live)')
+    
+    # Convenience flags
+    parser.add_argument('--retail', '--mainline', action='append_const', const='mainline', dest='flavor')
+    parser.add_argument('--classic', action='append_const', const='classic', dest='flavor')
+    parser.add_argument('--live', action='append_const', const='live', dest='channel')
+    parser.add_argument('--ptr', action='append_const', const='ptr', dest='channel')
+    parser.add_argument('--beta', action='append_const', const='beta', dest='channel')
+    parser.add_argument('--alpha', action='append_const', const='alpha', dest='channel')
 
-    channels = parser.add_argument_group()
-    channels.add_argument('--channel', choices=['live', 'ptr', 'beta', 'alpha'], nargs='+')
-    channels.add_argument('--live', action='append_const', const='live', dest='channel')
-    channels.add_argument('--ptr', action='append_const', const='ptr', dest='channel')
-    channels.add_argument('--beta', action='append_const', const='beta', dest='channel')
-    channels.add_argument('--alpha', action='append_const', const='alpha', dest='channel')
-
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Apply defaults if no flags were used
+    if not args.flavor:
+        args.flavor = ['mainline', 'classic']
+    if not args.channel:
+        args.channel = ['live']
+    
+    # Remove duplicates while preserving order
+    args.flavor = list(dict.fromkeys(args.flavor))
+    args.channel = list(dict.fromkeys(args.channel))
+    
+    return args
 
 def get_target_dirs(wow_home, flavors, channels):
     """Get target directories based on flavors and channels."""
@@ -92,55 +102,16 @@ def get_target_dirs(wow_home, flavors, channels):
 def main():
     args = parse_args()
 
-    flavors = args.flavor
-    if not flavors:
-        flavors = ['mainline', 'classic']
-
-    channels = args.channel
-    if not channels:
-        channels = ['live']
-
-    if not os.environ["WOW_HOME"]:
-        print("The World of Warcraft home directory environment variable has not yet been set. Please set it to the World of Warcraft install directory")
+    # Validate WOW_HOME environment
+    wow_home_str = os.environ.get("WOW_HOME")
+    if not wow_home_str:
+        print("Error: WOW_HOME environment variable not set. Please set it to your World of Warcraft installation directory.")
         return 1
 
-    wow_home = Path(os.environ["WOW_HOME"])
+    wow_home = Path(wow_home_str)
     if not wow_home.exists():
-        print(f'The World of Warcraft home directory, "{wow_home.absolute()}" could not be read')
+        print(f'Error: World of Warcraft directory "{wow_home.absolute()}" not found.')
         return 1
-
-    # compute addon directory targets
-    target_dirs: set[str] = set()
-    if "mainline" in flavors:
-        if "live" in channels:
-            target_dirs.add("retail")
-
-        if "ptr" in channels:
-            target_dirs.add("ptr")
-            target_dirs.add("xptr")
-
-        if "beta" in channels:
-            target_dirs.add("beta")
-
-        if "alpha" in channels:
-            target_dirs.add("alpha")
-
-    if "classic" in flavors:
-        if "live" in channels:
-            target_dirs.add("classic")
-            target_dirs.add("classic_era")
-
-        if "ptr" in channels:
-            target_dirs.add("classic_ptr")
-            target_dirs.add("classic_era_ptr")
-
-        if "beta" in channels:
-            target_dirs.add("classic_beta")
-            target_dirs.add("classic_era_beta")
-
-        if "alpha" in channels:
-            target_dirs.add("classic_alpha")
-            target_dirs.add("classic_era_alpha")
 
     # setup the working directory
     working_dir = Path("/tmp/wowp")
@@ -172,7 +143,7 @@ def main():
     # copy files to the output directories
     print("Copying files...", end="\n\n")
 
-    for target_dir in get_target_dirs():
+    for target_dir in get_target_dirs(wow_home, args.flavor, args.channel):
         for d in [f for f in os.scandir(release_dir) if f.is_dir()]:
             print(f"- Copying {d.name} to {target_dir}...", end='\r')
 
