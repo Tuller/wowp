@@ -20,7 +20,7 @@ class Color(Enum):
     BOLD = '\033[1m'
     RESET = '\033[0m'
 
-def colored(text, *styles):
+def colorize(text, *styles):
     """Apply color/style to text using ANSI codes."""
     if not sys.stdout.isatty():  # Don't colorize if output is redirected
         return text
@@ -29,11 +29,11 @@ def colored(text, *styles):
     return f"{''.join(codes)}{text}{Color.RESET.value}" if codes else text
 
 # Semantic color helpers
-def error(text): return colored(text, Color.RED)
-def success(text): return colored(text, Color.GREEN, Color.BOLD)
-def header(text): return colored(text, Color.BLUE, Color.BOLD)
-def counter(text): return colored(text, Color.CYAN)
-def checkmark(): return colored("✓", Color.GREEN)
+def error(text): return colorize(text, Color.RED)
+def success(text): return colorize(text, Color.GREEN, Color.BOLD)
+def header(text): return colorize(text, Color.BLUE, Color.BOLD)
+def counter(text): return colorize(text, Color.CYAN)
+def checkmark(): return colorize("✓", Color.GREEN)
 
 PACKAGER_VERSION = "v2.4.2"
 
@@ -168,7 +168,7 @@ def main():
         return 1
 
     # deploy addons to the output directories
-    print(colored("Deploying addons...", Color.BOLD) + "\n")
+    print(colorize("Deploying addons...", Color.BOLD) + "\n")
 
     target_dirs = list(get_target_dirs(wow_home, args.flavor, args.channel))
     addon_dirs = [f for f in os.scandir(release_dir) if f.is_dir()]
