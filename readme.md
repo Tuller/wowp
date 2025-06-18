@@ -1,26 +1,47 @@
 # wowp
 
-This is a Python script I use to call the [BigWigs packager](https://github.com/BigWigsMods/packager)
-in order to build and deploy an addon I'm working on to multiple World of
-Warcraft addon directories at once.
+A Python script that automates building and deploying World of Warcraft addons using the [BigWigs packager](https://github.com/BigWigsMods/packager). It builds your addon once and deploys it to multiple WoW client directories simultaneously.
 
-# Requirements
+## Requirements
 
-- Python 3
-- rsync
-- A WOW_HOME environment variable set to the World of Warcraft installation directory
+- Python 3.6+ (uses f-strings and pathlib)
+- `WOW_HOME` environment variable set to your World of Warcraft installation directory
 
-# Usage
+## Usage
 
-```bash wowp.py [options] ```
+```bash
+python3 wowp.py [options]
+```
+
+### Options
 
 | Option | Description |
 | ------ | ----------- |
-| --flavor \[mainline, classic\] | Sets the target versions. Defaults to mainline and classic |
-| --channel \[live, ptr, beta, alpha\] | Sets the target release channels. Defaults to live |
-| --retail --mainline | Adds mainline to the flavor list |
-| --classic | Adds classic to the flavor list |
-| --live | Adds live to the channel list |
-| --ptr | Adds ptr to the channel list |
-| --beta | Adds beta to the channel list |
-| --alpha | Adds alpha to the channel list |
+| `--flavor mainline classic` | Target WoW flavors (default: both) |
+| `--channel live ptr beta alpha` | Target release channels (default: live) |
+| `--retail`, `--mainline` | Deploy to mainline/retail |
+| `--classic` | Deploy to classic |
+| `--live` | Deploy to live servers |
+| `--ptr` | Deploy to PTR servers |  
+| `--beta` | Deploy to beta servers |
+| `--alpha` | Deploy to alpha servers |
+
+### Examples
+
+```bash
+# Deploy to all default targets (mainline + classic, live only)
+python3 wowp.py
+
+# Deploy only to retail PTR
+python3 wowp.py --retail --ptr
+
+# Deploy to all classic channels
+python3 wowp.py --classic --live --ptr --beta
+```
+
+## How it works
+
+1. Downloads and verifies the BigWigs packager script (v2.4.2)
+2. Builds your addon in `/tmp/wowp` 
+3. Deploys to WoW client directories using Python file operations
+4. Shows colored progress output
