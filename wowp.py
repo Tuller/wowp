@@ -13,6 +13,18 @@ PACKAGER_VERSION = "v2.4.2"
 # curl https://raw.githubusercontent.com/BigWigsMods/packager/refs/tags/v2.4.2/release.sh | sha256sum
 PACKAGER_SHA256 = "37c259ef699fc1cd816d5d1839a4c4773a6418f627f7bf27cd5cfefe1b682e2c"
 
+# Mapping of (flavor, channel) combinations to target directory names
+TARGET_MAP = {
+    ('mainline', 'live'): ['retail'],
+    ('mainline', 'ptr'): ['ptr', 'xptr'],
+    ('mainline', 'beta'): ['beta'],
+    ('mainline', 'alpha'): ['alpha'],
+    ('classic', 'live'): ['classic', 'classic_era'],
+    ('classic', 'ptr'): ['classic_ptr', 'classic_era_ptr'],
+    ('classic', 'beta'): ['classic_beta', 'classic_era_beta'],
+    ('classic', 'alpha'): ['classic_alpha', 'classic_era_alpha'],
+}
+
 def get_sha256(path: Path) -> str:
     h = hashlib.sha256()
 
@@ -63,59 +75,17 @@ def parse_args():
 
     return parser.parse_args()
 
-def get_target_dirs():
-    args = parse_args()
-
-    flavors = args.flavor
-    if not flavors:
-        flavors = ['mainline', 'classic']
-
-    channels = args.channel
-    if not channels:
-        channels = ['live']
-
-    if not os.environ["WOW_HOME"]:
-        raise Exception("The World of Warcraft home directory environment variable has not yet been set. Please set it to the World of Warcraft install directory")
-
-    wow_home = Path(os.environ["WOW_HOME"])
-    if not wow_home.exists():
-        raise Exception(f'The World of Warcraft home directory "{wow_home.absolute()}" could not be read')
-
-    # compute addon directory targets
-    targets: set[str] = set()
-    if "mainline" in flavors:
-        if "live" in channels:
-            targets.add("retail")
-
-        if "ptr" in channels:
-            targets.add("ptr")
-            targets.add("xptr")
-
-        if "beta" in channels:
-            targets.add("beta")
-
-        if "alpha" in channels:
-            targets.add("alpha")
-
-    if "classic" in flavors:
-        if "live" in channels:
-            targets.add("classic")
-            targets.add("classic_era")
-
-        if "ptr" in channels:
-            targets.add("classic_ptr")
-            targets.add("classic_era_ptr")
-
-        if "beta" in channels:
-            targets.add("classic_beta")
-            targets.add("classic_era_beta")
-
-        if "alpha" in channels:
-            targets.add("classic_alpha")
-            targets.add("classic_era_alpha")
-
-    for t in targets:
-        target_dir = wow_home.joinpath(f"_{t}_", "Interface", "AddOns")
+def get_target_dirs(wow_home, flavors, channels):
+    """Get target directories based on flavors and channels."""
+    targets = set()
+    
+    for flavor in flavors:
+        for channel in channels:
+            if (flavor, channel) in TARGET_MAP:
+                targets.update(TARGET_MAP[(flavor, channel)])
+    
+    for target in targets:
+        target_dir = wow_home.joinpath(f"_{target}_", "Interface", "AddOns")
         if target_dir.exists():
             yield target_dir
 
