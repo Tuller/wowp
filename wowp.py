@@ -7,6 +7,8 @@ import urllib.request
 import hashlib
 import stat
 import subprocess
+import tempfile
+from typing import List, Union
 
 # ANSI color codes and utilities
 from enum import Enum
@@ -20,7 +22,7 @@ class Color(Enum):
     BOLD = '\033[1m'
     RESET = '\033[0m'
 
-def colorize(text, *styles):
+def colorize(text: str, *styles: Union[Color, str]) -> str:
     """Apply color/style to text using ANSI codes."""
     if not sys.stdout.isatty():  # Don't colorize if output is redirected
         return text
@@ -29,11 +31,11 @@ def colorize(text, *styles):
     return f"{''.join(codes)}{text}{Color.RESET.value}" if codes else text
 
 # Semantic color helpers
-def error(text): return colorize(text, Color.RED)
-def success(text): return colorize(text, Color.GREEN, Color.BOLD)
-def header(text): return colorize(text, Color.BLUE, Color.BOLD)
-def counter(text): return colorize(text, Color.CYAN)
-def checkmark(): return colorize("✓", Color.GREEN)
+def error(text: str) -> str: return colorize(text, Color.RED)
+def success(text: str) -> str: return colorize(text, Color.GREEN, Color.BOLD)
+def header(text: str) -> str: return colorize(text, Color.BLUE, Color.BOLD)
+def counter(text: str) -> str: return colorize(text, Color.CYAN)
+def checkmark() -> str: return colorize("✓", Color.GREEN)
 
 PACKAGER_VERSION = "v2.4.2"
 
@@ -82,7 +84,7 @@ def download_packager(working_dir: Path) -> Path:
 
     return script_path
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="WoW Publisher")
 
     parser.add_argument('--flavor', choices=['mainline', 'classic'], nargs='+',
@@ -112,7 +114,7 @@ def parse_args():
     
     return args
 
-def get_target_dirs(wow_home, flavors, channels):
+def get_target_dirs(wow_home: Path, flavors: List[str], channels: List[str]) -> List[Path]:
     """Get target directories based on flavors and channels."""
     targets = set()
     
@@ -121,12 +123,55 @@ def get_target_dirs(wow_home, flavors, channels):
             if (flavor, channel) in TARGET_MAP:
                 targets.update(TARGET_MAP[(flavor, channel)])
     
+    found_targets = []
     for target in targets:
         target_dir = wow_home.joinpath(f"_{target}_", "Interface", "AddOns")
         if target_dir.exists():
-            yield target_dir
+            found_targets.append(target_dir)
+    return found_targets
 
-def main():
+def run_packager(working_dir: Path) -> List[Path]:
+    """Downloads and runs the packager."""
+    packager_path = download_packager(working_dir)
+    release_dir = working_dir.joinpath("release")
+
+    proc = subprocess.run([
+        str(packager_path),
+        "-dlzS",
+        "-t",
+        str(Path.cwd()),
+        "-r",
+        str(release_dir),
+    ])
+
+    if proc.returncode != 0:
+        # The packager script already prints errors to stderr, so we just need to exit.
+        raise RuntimeError(f"Packager execution failed with return code {proc.returncode}")
+    
+    return [f for f in release_dir.iterdir() if f.is_dir()]
+
+def deploy_addons(addon_dirs: List[Path], target_dirs: List[Path]) -> None:
+    """Deploys addons to the target directories."""
+    print(colorize("Deploying addons...", Color.BOLD) + "\n")
+
+    for i, target_dir in enumerate(target_dirs, 1):
+        target_name = target_dir.parent.parent.name.strip('_')
+        print(f"{counter(f'[{i}/{len(target_dirs)}]')} {header(target_name)}:")
+
+        for j, addon_dir in enumerate(addon_dirs, 1):
+            dest_addon_dir = target_dir.joinpath(addon_dir.name)
+            print(f"  {counter(f'[{j}/{len(addon_dirs)}]')} {addon_dir.name}...", end=" ")
+
+            if dest_addon_dir.exists():
+                shutil.rmtree(dest_addon_dir)
+            
+            shutil.copytree(addon_dir, dest_addon_dir)
+
+            print(checkmark())
+        
+        print()
+
+def main() -> int:
     args = parse_args()
 
     # Validate WOW_HOME environment
@@ -140,61 +185,21 @@ def main():
         print(error(f'World of Warcraft directory "{wow_home.absolute()}" not found.'))
         return 1
 
-    # setup the working directory
-    working_dir = Path("/tmp/wowp")
-    if working_dir.exists():
-        shutil.rmtree("/tmp/wowp")
-
-    working_dir.mkdir()
-
-    # grab the packager script
-    packager = download_packager(working_dir)
-
-    # setup the release directory
-    release_dir = working_dir.joinpath("release")
-
-    # run the packager
-    packager_result = subprocess.run([
-        packager,
-        "-dlzS",
-        "-t",
-        os.getcwd(),
-        "-r",
-        release_dir
-    ])
-
-    if packager_result.returncode != 0:
-        print(error(f"Packager execution failed with return code {packager_result.returncode}"))
+    target_dirs = get_target_dirs(wow_home, args.flavor, args.channel)
+    if not target_dirs:
+        print(error("No WoW installations found for the specified flavor/channel combination."))
         return 1
 
-    # deploy addons to the output directories
-    print(colorize("Deploying addons...", Color.BOLD) + "\n")
-
-    target_dirs = list(get_target_dirs(wow_home, args.flavor, args.channel))
-    addon_dirs = [f for f in os.scandir(release_dir) if f.is_dir()]
-    
-    for i, target_dir in enumerate(target_dirs, 1):
-        # Extract just the target name from the path (e.g., "retail" from "/_retail_/Interface/AddOns")
-        target_name = target_dir.parent.parent.name.strip('_')
-        print(f"{counter(f'[{i}/{len(target_dirs)}]')} {header(target_name)}:")
-        
-        for j, d in enumerate(addon_dirs, 1):
-            print(f"  {counter(f'[{j}/{len(addon_dirs)}]')} {d.name}...", end=" ")
-
-            dest_addon_dir = target_dir / d.name
-            
-            # Remove existing addon directory if it exists (equivalent to rsync --delete)
-            if dest_addon_dir.exists():
-                shutil.rmtree(dest_addon_dir)
-            
-            # Copy the addon directory
-            shutil.copytree(d.path, dest_addon_dir)
-
-            print(checkmark())
-        
-        print()
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            addon_dirs = run_packager(Path(temp_dir))
+            deploy_addons(addon_dirs, target_dirs)
+    except RuntimeError as e:
+        print(error(str(e)))
+        return 1
 
     print(success("Deployment complete!"))
+
 
 if __name__ == "__main__":
     main()
