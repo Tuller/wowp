@@ -81,7 +81,8 @@ def _detect_vcs_type(url: str) -> VcsType:
         return VcsType.GIT
     if 'github.com' in url or 'gitlab.com' in url:
         return VcsType.GIT
-    if '/trunk/' in url or '/tags/' in url or '/branches/' in url:
+    # Check for SVN markers: /trunk, /tags/, /branches/ (with or without trailing slash)
+    if re.search(r'/(trunk|tags|branches)(/|$)', url):
         return VcsType.SVN
     if 'repos.wowace.com' in url or 'repos.curseforge.com' in url:
         return VcsType.GIT
@@ -95,19 +96,45 @@ def _parse_external(dest_path: str, value: Any) -> External:
 
     # Expanded format with url, tag, branch, commit, type
     url = value.get('url', '')
+    if not url or not url.strip():
+        raise ValueError(
+            f"External '{dest_path}': 'url' field is required and cannot be empty"
+        )
+
     vcs_type_str = value.get('type')
     if vcs_type_str:
         vcs_type = VcsType.GIT if vcs_type_str == 'git' else VcsType.SVN
     else:
         vcs_type = _detect_vcs_type(url)
 
+    # Convert numeric values to strings (YAML parses 1.0 as float)
+    tag = value.get('tag')
+    if tag is not None:
+        tag = str(tag)
+
+    branch = value.get('branch')
+    if branch is not None:
+        branch = str(branch)
+
+    commit = value.get('commit')
+    if commit is not None:
+        commit = str(commit)
+
+    # Validate that only one version specifier is provided
+    version_specifiers = [tag, branch, commit]
+    if sum(1 for v in version_specifiers if v is not None) > 1:
+        raise ValueError(
+            f"External '{dest_path}': Cannot specify multiple of tag/branch/commit. "
+            f"Only one version specifier should be provided."
+        )
+
     return External(
         dest_path=dest_path,
         url=url,
         vcs_type=vcs_type,
-        tag=value.get('tag'),
-        branch=value.get('branch'),
-        commit=value.get('commit')
+        tag=tag,
+        branch=branch,
+        commit=commit
     )
 
 
@@ -138,7 +165,18 @@ class ExternalsCache:
         """Generate unique cache key for an external."""
         url_hash = hashlib.sha256(external.url.encode()).hexdigest()[:12]
         dest_name = Path(external.dest_path).name
-        return f"{url_hash}_{dest_name}"
+
+        # Include version specifier in cache key to prevent collisions
+        # when same URL is used with different tags/branches/commits
+        version_spec = ""
+        if external.tag:
+            version_spec = f"_tag-{external.tag}"
+        elif external.branch:
+            version_spec = f"_branch-{external.branch}"
+        elif external.commit:
+            version_spec = f"_commit-{external.commit}"
+
+        return f"{url_hash}_{dest_name}{version_spec}"
 
     def get_cache_path(self, external: External) -> Path:
         """Return cache path for an external."""
@@ -259,6 +297,82 @@ class ExternalFetcher:
         self.cache = cache
         self._svn_repo_cache: Dict[str, Path] = {}  # base_url -> temp_path
 
+    def _build_svn_url(self, base_url: str, tag: Optional[str] = None,
+                       branch: Optional[str] = None) -> str:
+        """
+        Build a proper SVN URL by replacing or adding trunk/tags/branches markers.
+
+        Handles standard SVN repository layouts where repositories have:
+        - /trunk/ for main development
+        - /tags/VERSION/ for tagged releases
+        - /branches/NAME/ for branches
+
+        Args:
+            base_url: The base SVN URL (may or may not contain markers)
+            tag: Optional tag name to use (e.g., "1.0")
+            branch: Optional branch name to use (e.g., "feature-x")
+
+        Returns:
+            Properly formatted SVN URL with markers replaced/added as needed
+
+        Examples:
+            _build_svn_url("https://repos.com/lib/trunk", tag="1.0")
+            -> "https://repos.com/lib/tags/1.0"
+
+            _build_svn_url("https://repos.com/lib/trunk/Sub", tag="1.0")
+            -> "https://repos.com/lib/tags/1.0/Sub"
+
+            _build_svn_url("https://repos.com/lib", tag="1.0")
+            -> "https://repos.com/lib/tags/1.0"
+        """
+        # If neither tag nor branch specified, return URL unchanged
+        if not tag and not branch:
+            return base_url
+
+        # Determine which marker to use
+        if tag:
+            new_marker = f"tags/{tag}"
+        elif branch:
+            new_marker = f"branches/{branch}"
+        else:
+            return base_url
+
+        # Pattern to match trunk, tags/*, or branches/* with optional subdirectories
+        # Groups: (1) everything before marker, (2) optional subdirectory after marker
+        pattern = r'(.*?/)(?:trunk|tags/[^/]+|branches/[^/]+)((?:/.*)?)'
+
+        match = re.match(pattern, base_url)
+
+        if match:
+            # Found an existing marker - replace it
+            prefix = match.group(1)  # Everything before marker
+            suffix = match.group(2)  # Everything after marker (subdirs)
+
+            # Remove leading slash from suffix if present for clean joining
+            suffix = suffix.lstrip('/')
+
+            # Reconstruct URL
+            if suffix:
+                return f"{prefix}{new_marker}/{suffix}"
+            else:
+                return f"{prefix}{new_marker}"
+        else:
+            # No marker found - append new marker
+            base_url = base_url.rstrip('/')
+            return f"{base_url}/{new_marker}"
+
+    def _has_svn_marker(self, url: str) -> bool:
+        """
+        Check if URL contains an SVN marker (trunk/tags/branches).
+
+        Args:
+            url: SVN URL to check
+
+        Returns:
+            True if URL contains a marker, False otherwise
+        """
+        return bool(re.search(r'/(?:trunk|tags/[^/]+|branches/[^/]+)(?:/|$)', url))
+
     def fetch_all(self, externals: List[External], staging_dir: Path, force_refresh: bool = False) -> None:
         """Fetch all externals, optimizing for shared parent repos."""
         # Group SVN externals by base repo for optimization
@@ -288,10 +402,37 @@ class ExternalFetcher:
             self.fetch(ext, dest_path, force_refresh)
 
     def _get_svn_base_url(self, url: str) -> Optional[str]:
-        """Extract base SVN repo URL (up to trunk/tags/branches)."""
-        for marker in ['/trunk/', '/tags/', '/branches/']:
-            if marker in url:
-                return url.split(marker)[0] + marker.rstrip('/')
+        """
+        Extract base SVN repo URL for grouping optimization.
+
+        Grouping optimization: Multiple externals from the same /trunk can be fetched
+        together by checking out /trunk once and copying subdirectories.
+
+        However, tags/branches with different versions should NOT be grouped together
+        (e.g., tags/1.0 and tags/2.0 are different and can't share a checkout).
+
+        Strategy: Only enable grouping for /trunk URLs. Disable for tags/branches.
+
+        Args:
+            url: Full SVN URL
+
+        Returns:
+            Base URL for trunk externals, None for tags/branches (disables grouping)
+
+        Examples:
+            _get_svn_base_url("https://repos.com/lib/trunk/SubDir")
+            -> "https://repos.com/lib/trunk"
+
+            _get_svn_base_url("https://repos.com/lib/tags/1.0/SubDir")
+            -> None  (grouping disabled for tags)
+        """
+        # Only group /trunk URLs - tags/branches should be fetched individually
+        pattern = r'(.*?/trunk)(?:/|$)'
+        match = re.match(pattern, url)
+
+        if match:
+            return match.group(1)
+
         return None
 
     def _fetch_svn_group(self, base_url: str, externals: List[External],
@@ -334,10 +475,39 @@ class ExternalFetcher:
                     self._copy_from_cache(self.cache.get_cache_path(ext), dest_path)
 
     def _get_svn_subdir(self, url: str) -> str:
-        """Get subdirectory path from SVN URL."""
-        for marker in ['/trunk/', '/tags/', '/branches/']:
-            if marker in url:
-                return url.split(marker, 1)[1]
+        """
+        Get subdirectory path from SVN URL (path after the marker).
+
+        For grouping optimization, this extracts everything after the base marker
+        (trunk/tags/branches), including the version number for tags/branches.
+
+        Args:
+            url: Full SVN URL
+
+        Returns:
+            Subdirectory path (empty string if none)
+
+        Examples:
+            _get_svn_subdir("https://repos.com/lib/trunk/LibStub/Core")
+            -> "LibStub/Core"
+
+            _get_svn_subdir("https://repos.com/lib/tags/1.0")
+            -> "1.0"
+
+            _get_svn_subdir("https://repos.com/lib/tags/1.0/LibStub")
+            -> "1.0/LibStub"
+
+            _get_svn_subdir("https://repos.com/lib/branches/dev/Sub")
+            -> "dev/Sub"
+        """
+        # Pattern to extract everything after base marker (trunk/tags/branches)
+        # For tags/branches, this includes the version/name as part of the subdir
+        pattern = r'.*?/(?:trunk|tags|branches)(?:/(.+))?'
+        match = re.match(pattern, url)
+
+        if match and match.group(1):
+            return match.group(1)
+
         return ""
 
     def fetch(self, external: External, dest_dir: Path, force_refresh: bool = False) -> None:
@@ -413,17 +583,12 @@ class ExternalFetcher:
 
     def _fetch_svn(self, external: External, dest_dir: Path) -> None:
         """Checkout SVN repository."""
-        url = external.url
-
-        # Handle tag/branch by appending to URL if not already present
-        if external.tag and '/tags/' not in url:
-            url = url.rstrip('/') + f"/tags/{external.tag}"
-        elif external.branch and '/branches/' not in url:
-            url = url.rstrip('/') + f"/branches/{external.branch}"
+        # Build proper SVN URL with tag/branch replacement
+        url = self._build_svn_url(external.url, external.tag, external.branch)
 
         # For repos without trunk/tags/branches, try with /trunk first, then without
         urls_to_try = [url]
-        if '/trunk/' not in url and '/tags/' not in url and '/branches/' not in url:
+        if not self._has_svn_marker(url):
             urls_to_try = [url.rstrip('/') + "/trunk", url]
 
         last_error = None
@@ -431,6 +596,14 @@ class ExternalFetcher:
             cmd = ["svn", "checkout", "-q", "--non-interactive", try_url, str(dest_dir)]
 
             if external.commit:
+                # Validate SVN revision is numeric
+                try:
+                    int(external.commit)
+                except ValueError:
+                    raise ValueError(
+                        f"SVN revision must be numeric, got: '{external.commit}' "
+                        f"for external '{external.dest_path}'"
+                    )
                 cmd.insert(3, f"-r{external.commit}")
 
             try:
