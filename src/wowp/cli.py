@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, NamedTuple
 
 import yaml
 from watchdog.events import FileSystemEventHandler
@@ -72,9 +72,9 @@ class External:
     dest_path: str  # e.g., "Addon/libs/LibStub"
     url: str  # e.g., "https://repos.wowace.com/wow/libstub/tags/1.0"
     vcs_type: VcsType
-    tag: Optional[str] = None
-    branch: Optional[str] = None
-    commit: Optional[str] = None
+    tag: str | None = None
+    branch: str | None = None
+    commit: str | None = None
 
 
 @dataclass
@@ -82,9 +82,9 @@ class PkgMeta:
     """Parsed .pkgmeta configuration."""
 
     package_as: str = ""
-    move_folders: Dict[str, str] = field(default_factory=dict)
-    externals: List[External] = field(default_factory=list)
-    ignore: List[str] = field(default_factory=list)
+    move_folders: dict[str, str] = field(default_factory=dict)
+    externals: list[External] = field(default_factory=list)
+    ignore: list[str] = field(default_factory=list)
 
 
 # Cache configuration
@@ -160,8 +160,7 @@ def _parse_external(dest_path: str, value: Any) -> External:
 
 def parse_pkgmeta(pkgmeta_path: Path) -> PkgMeta:
     """Parse a .pkgmeta YAML file and return structured data."""
-    with open(pkgmeta_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    data = yaml.safe_load(pkgmeta_path.read_text(encoding="utf-8")) or {}
 
     externals = []
     for dest_path, value in (data.get("externals") or {}).items():
@@ -222,17 +221,14 @@ class ExternalsCache:
             return False
 
         # Check age for trunk/branch externals
-        meta_path = self.get_meta_path(external)
         try:
-            with open(meta_path, "r") as f:
-                meta = json.load(f)
-            fetched_at = meta.get("fetched_at", 0)
-            age_hours = (time.time() - fetched_at) / 3600
+            meta = json.loads(self.get_meta_path(external).read_text())
+            age_hours = (time.time() - meta.get("fetched_at", 0)) / 3600
             return age_hours > CACHE_MAX_AGE_HOURS
         except (OSError, json.JSONDecodeError):
             return True
 
-    def get(self, external: External) -> Optional[Path]:
+    def get(self, external: External) -> Path | None:
         """Get path to cached external if valid, else None."""
         if self.is_cached(external) and not self.is_stale(external):
             return self.get_cache_path(external)
@@ -259,8 +255,7 @@ class ExternalsCache:
             "vcs_type": external.vcs_type.value,
         }
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        with open(self.get_meta_path(external), "w") as f:
-            json.dump(meta, f, indent=2)
+        self.get_meta_path(external).write_text(json.dumps(meta, indent=2))
 
         return cache_path
 
@@ -275,7 +270,7 @@ class ExternalsCache:
         if self.cache_dir.exists():
             shutil.rmtree(self.cache_dir)
 
-    def get_cache_info(self) -> Dict[str, Any]:
+    def get_cache_info(self) -> dict[str, Any]:
         """Return cache statistics."""
         if not self.cache_dir.exists():
             return {"total_size": 0, "entry_count": 0, "entries": []}
@@ -296,8 +291,7 @@ class ExternalsCache:
             entry_info = {"name": entry_dir.name, "size": entry_size}
             if meta_path.exists():
                 try:
-                    with open(meta_path, "r") as f:
-                        meta = json.load(f)
+                    meta = json.loads(meta_path.read_text())
                     entry_info["url"] = meta.get("url", "unknown")
                     entry_info["fetched_at"] = meta.get("fetched_at", 0)
                 except (OSError, json.JSONDecodeError):
@@ -317,10 +311,9 @@ class ExternalFetcher:
 
     def __init__(self, cache: ExternalsCache):
         self.cache = cache
-        self._svn_repo_cache: Dict[str, Path] = {}  # base_url -> temp_path
 
     def _build_svn_url(
-        self, base_url: str, tag: Optional[str] = None, branch: Optional[str] = None
+        self, base_url: str, tag: str | None = None, branch: str | None = None
     ) -> str:
         """
         Build a proper SVN URL by replacing or adding trunk/tags/branches markers.
@@ -355,10 +348,8 @@ class ExternalFetcher:
         # Determine which marker to use
         if tag:
             new_marker = f"tags/{tag}"
-        elif branch:
-            new_marker = f"branches/{branch}"
         else:
-            return base_url
+            new_marker = f"branches/{branch}"
 
         # Pattern to match trunk, tags/*, or branches/* with optional subdirectories
         # Groups: (1) everything before marker, (2) optional subdirectory after marker
@@ -397,12 +388,12 @@ class ExternalFetcher:
         return bool(re.search(r"/(?:trunk|tags/[^/]+|branches/[^/]+)(?:/|$)", url))
 
     def fetch_all(
-        self, externals: List[External], staging_dir: Path, force_refresh: bool = False
+        self, externals: list[External], staging_dir: Path, force_refresh: bool = False
     ) -> None:
         """Fetch all externals, optimizing for shared parent repos."""
         # Group SVN externals by base repo for optimization
-        svn_groups: Dict[str, List[External]] = {}
-        other_externals: List[External] = []
+        svn_groups: dict[str, list[External]] = {}
+        other_externals: list[External] = []
 
         for ext in externals:
             if ext.vcs_type == VcsType.SVN:
@@ -426,7 +417,7 @@ class ExternalFetcher:
             dest_path = staging_dir / ext.dest_path
             self.fetch(ext, dest_path, force_refresh)
 
-    def _get_svn_base_url(self, url: str) -> Optional[str]:
+    def _get_svn_base_url(self, url: str) -> str | None:
         """
         Extract base SVN repo URL for grouping optimization.
 
@@ -463,7 +454,7 @@ class ExternalFetcher:
     def _fetch_svn_group(
         self,
         base_url: str,
-        externals: List[External],
+        externals: list[External],
         staging_dir: Path,
         force_refresh: bool,
     ) -> None:
@@ -672,10 +663,10 @@ class ExternalFetcher:
 
     def _run_with_retry(
         self,
-        cmd: List[str],
+        cmd: list[str],
         description: str,
         max_attempts: int = 5,
-        cleanup_dir: Optional[Path] = None,
+        cleanup_dir: Path | None = None,
     ) -> None:
         """Run command with retry logic. Optionally cleans up directory before retry."""
         last_error = None
@@ -700,13 +691,18 @@ class ExternalFetcher:
         )
 
 
+class _IgnoreRule(NamedTuple):
+    is_negation: bool
+    regex: re.Pattern[str]
+    dir_only: bool
+
+
 class IgnoreMatcher:
     """Simplified gitignore-style pattern matcher."""
 
-    def __init__(self, patterns: List[str], base_dir: Path):
+    def __init__(self, patterns: list[str], base_dir: Path):
         self.base_dir = base_dir
-        # Rules: (is_negation, compiled_regex, dir_only)
-        self.rules: List[tuple] = []
+        self.rules: list[_IgnoreRule] = []
 
         for pattern in patterns:
             pattern = pattern.strip()
@@ -717,10 +713,10 @@ class IgnoreMatcher:
     @classmethod
     def from_gitignore(cls, gitignore_path: Path) -> "IgnoreMatcher":
         """Load patterns from .gitignore file."""
-        patterns = []
         if gitignore_path.exists():
-            with open(gitignore_path, "r", encoding="utf-8") as f:
-                patterns = f.readlines()
+            patterns = gitignore_path.read_text(encoding="utf-8").splitlines()
+        else:
+            patterns = []
         return cls(patterns, gitignore_path.parent)
 
     def _add_pattern(self, pattern: str) -> None:
@@ -739,7 +735,7 @@ class IgnoreMatcher:
             pattern = pattern[1:]
 
         regex = self._glob_to_regex(pattern, anchored)
-        self.rules.append((is_negation, re.compile(regex), dir_only))
+        self.rules.append(_IgnoreRule(is_negation, re.compile(regex), dir_only))
 
     def _glob_to_regex(self, pattern: str, anchored: bool) -> str:
         """Convert gitignore glob pattern to regex."""
@@ -810,15 +806,15 @@ class IgnoreMatcher:
         path_str = str(rel_path).replace("\\", "/")  # Normalize for Windows
         ignored = False
 
-        for is_negation, regex, dir_only in self.rules:
-            if dir_only and not is_dir:
+        for rule in self.rules:
+            if rule.dir_only and not is_dir:
                 continue
-            if regex.search(path_str):
-                ignored = not is_negation
+            if rule.regex.search(path_str):
+                ignored = not rule.is_negation
 
         return ignored
 
-    def filter_paths(self, paths: List[Path]) -> List[Path]:
+    def filter_paths(self, paths: list[Path]) -> list[Path]:
         """Return paths that are NOT ignored."""
         return [p for p in paths if not self.is_ignored(p, p.is_dir())]
 
@@ -848,7 +844,7 @@ class AddonBuilder:
         self.cache = ExternalsCache()
         self.fetcher = ExternalFetcher(self.cache)
 
-    def build(self) -> List[Path]:
+    def build(self) -> list[Path]:
         """Build addon and return list of output directories."""
         # Parse .pkgmeta
         pkgmeta_path = self.source_dir / ".pkgmeta"
@@ -898,8 +894,8 @@ class AddonBuilder:
         print(f"\n{colorize('Fetching externals...', Color.BOLD)}")
 
         # Group externals by SVN base URL for optimization
-        svn_groups: Dict[str, List[External]] = {}
-        other_externals: List[External] = []
+        svn_groups: dict[str, list[External]] = {}
+        other_externals: list[External] = []
 
         for ext in pkgmeta.externals:
             if ext.vcs_type == VcsType.SVN:
@@ -996,7 +992,7 @@ class AddonBuilder:
 
     def _apply_move_folders(
         self, pkgmeta: PkgMeta, staging_dir: Path, package_name: str
-    ) -> List[Path]:
+    ) -> list[Path]:
         """Apply move-folders mappings and return final addon directories."""
         package_dir = staging_dir / package_name
 
@@ -1009,7 +1005,7 @@ class AddonBuilder:
         )
 
         # First pass: move all sources to temp locations to avoid conflicts
-        temp_moves: List[tuple] = []  # (temp_path, dest_path)
+        temp_moves: list[tuple] = []  # (temp_path, dest_path)
         addon_dirs = []
 
         for src_rel, dest_name in pkgmeta.move_folders.items():
@@ -1052,7 +1048,7 @@ class AddonBuilder:
             if dirpath.is_dir() and not any(dirpath.iterdir()):
                 dirpath.rmdir()
 
-    def _replace_keywords(self, addon_dirs: List[Path], version: str) -> None:
+    def _replace_keywords(self, addon_dirs: list[Path], version: str) -> None:
         """Replace @keyword@ patterns in TOC files."""
         print(f"{colorize('Replacing keywords...', Color.BOLD)}", end=" ", flush=True)
 
@@ -1066,7 +1062,7 @@ class AddonBuilder:
 
         print(checkmark())
 
-    def _replace_in_file(self, file_path: Path, replacements: Dict[str, str]) -> None:
+    def _replace_in_file(self, file_path: Path, replacements: dict[str, str]) -> None:
         """Replace @keyword@ patterns in a file."""
         try:
             content = file_path.read_text(encoding="utf-8-sig")  # Handle BOM
@@ -1162,8 +1158,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def get_target_dirs(
-    wow_home: Path, flavors: List[str], channels: List[str]
-) -> List[Path]:
+    wow_home: Path, flavors: list[str], channels: list[str]
+) -> list[Path]:
     """Get target directories based on flavors and channels."""
     targets = set()
 
@@ -1172,15 +1168,14 @@ def get_target_dirs(
             if (flavor, channel) in TARGET_MAP:
                 targets.update(TARGET_MAP[(flavor, channel)])
 
-    found_targets = []
-    for target in targets:
-        target_dir = wow_home.joinpath(f"_{target}_", "Interface", "AddOns")
-        if target_dir.exists():
-            found_targets.append(target_dir)
-    return found_targets
+    return [
+        target_dir
+        for target in targets
+        if (target_dir := wow_home / f"_{target}_" / "Interface" / "AddOns").exists()
+    ]
 
 
-def deploy_addons(addon_dirs: List[Path], target_dirs: List[Path]) -> None:
+def deploy_addons(addon_dirs: list[Path], target_dirs: list[Path]) -> None:
     """Deploys addons to the target directories."""
     print(colorize("Deploying addons...", Color.BOLD) + "\n")
 
@@ -1189,7 +1184,7 @@ def deploy_addons(addon_dirs: List[Path], target_dirs: List[Path]) -> None:
         print(f"{counter(f'[{i}/{len(target_dirs)}]')} {header(target_name)}:")
 
         for j, addon_dir in enumerate(addon_dirs, 1):
-            dest_addon_dir = target_dir.joinpath(addon_dir.name)
+            dest_addon_dir = target_dir / addon_dir.name
             print(
                 f"  {counter(f'[{j}/{len(addon_dirs)}]')} {addon_dir.name}...", end=" "
             )
@@ -1219,12 +1214,12 @@ class AddonChangeHandler(FileSystemEventHandler):
     DEBOUNCE_SECONDS = 1.0
 
     def __init__(
-        self, source_dir: Path, ignore_matcher: Optional[IgnoreMatcher] = None
+        self, source_dir: Path, ignore_matcher: IgnoreMatcher | None = None
     ):
         super().__init__()
         self.source_dir = source_dir
         self.ignore_matcher = ignore_matcher
-        self.last_change_time: Optional[float] = None
+        self.last_change_time: float | None = None
         self.pending_rebuild = False
         self._lock = threading.Lock()
 
@@ -1288,7 +1283,7 @@ class AddonChangeHandler(FileSystemEventHandler):
 
 
 def build_and_deploy(
-    source_dir: Path, target_dirs: List[Path], force_refresh: bool = False
+    source_dir: Path, target_dirs: list[Path], force_refresh: bool = False
 ) -> bool:
     """Build and deploy addon. Returns True on success."""
     try:
@@ -1310,7 +1305,7 @@ def build_and_deploy(
 
 
 def watch_and_build(
-    source_dir: Path, target_dirs: List[Path], force_refresh: bool = False
+    source_dir: Path, target_dirs: list[Path], force_refresh: bool = False
 ) -> int:
     """Watch for changes and rebuild automatically."""
     # Load ignore patterns
@@ -1426,5 +1421,9 @@ def main() -> int:
     return 1
 
 
-if __name__ == "__main__":
+def cli() -> None:
     sys.exit(main())
+
+
+if __name__ == "__main__":
+    cli()

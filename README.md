@@ -14,30 +14,23 @@ This iteration was mostly vibe coded, but works OK for my purposes.
 
 ## Installation
 
-### From Source (development)
-
 ```bash
 git clone https://github.com/Tuller/wowp.git
 cd wowp
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pipx install .
 ```
 
-### Build Standalone Binary
+### Development
 
 ```bash
-source .venv/bin/activate
-pip install pyinstaller
-pyinstaller --onefile --name wowp wowp.py
-
-# Copy to PATH
-cp dist/wowp ~/.local/bin/
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 ```
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.11+
 - Git (for Git externals)
 - SVN (for SVN externals)
 - `WOW_HOME` environment variable set to your WoW installation directory
@@ -48,24 +41,24 @@ Run from your addon's directory (where `.pkgmeta` is located):
 
 ```bash
 # Build and deploy to all flavors (retail + classic), live channel
-python3 /path/to/wowp.py
+wowp
 
 # Watch mode - rebuild on file changes
-python3 wowp.py --watch               # or -w
+wowp --watch               # or -w
 
 # Deploy to specific flavors/channels
-python3 wowp.py --retail              # Retail only
-python3 wowp.py --classic             # Classic only
-python3 wowp.py --retail --ptr        # Retail PTR
-python3 wowp.py --classic --beta      # Classic Beta
+wowp --retail              # Retail only
+wowp --classic             # Classic only
+wowp --retail --ptr        # Retail PTR
+wowp --classic --beta      # Classic Beta
 
 # Combine watch with flavor/channel selection
-python3 wowp.py --watch --retail      # Watch and deploy to retail only
+wowp --watch --retail      # Watch and deploy to retail only
 
 # Cache management
-python3 wowp.py --cache-info          # Show cache statistics
-python3 wowp.py --refresh-externals   # Force re-download all externals
-python3 wowp.py --clear-cache         # Clear the cache
+wowp --cache-info          # Show cache statistics
+wowp --refresh-externals   # Force re-download all externals
+wowp --clear-cache         # Clear the cache
 ```
 
 ## Supported .pkgmeta Features

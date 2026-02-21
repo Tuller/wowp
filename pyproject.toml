@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wowp"
+version = "0.1.0"
+description = "A fast World of Warcraft addon builder and deployer"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "watchdog>=4.0",
+]
+
+[project.scripts]
+wowp = "wowp.cli:cli"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
