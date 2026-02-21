@@ -21,7 +21,6 @@ from watchdog.observers import Observer
 
 
 class Color(Enum):
-    BLUE = "\033[94m"
     CYAN = "\033[96m"
     GREEN = "\033[92m"
     RED = "\033[91m"
@@ -43,16 +42,16 @@ def error(text: str) -> str:
     return colorize(text, Color.RED)
 
 
+def print_error(text: str) -> None:
+    print(error(text), file=sys.stderr)
+
+
 def success(text: str) -> str:
     return colorize(text, Color.GREEN, Color.BOLD)
 
 
-def header(text: str) -> str:
-    return colorize(text, Color.BLUE, Color.BOLD)
-
-
-def counter(text: str) -> str:
-    return colorize(text, Color.CYAN)
+def status(verb: str, detail: str = "", **kwargs) -> None:
+    print(f"{success(verb.rjust(12))} {detail}", **kwargs)
 
 
 def checkmark() -> str:
@@ -850,48 +849,33 @@ class AddonBuilder:
         pkgmeta_path = self.source_dir / ".pkgmeta"
         if pkgmeta_path.exists():
             pkgmeta = parse_pkgmeta(pkgmeta_path)
-            print(f"  Package: {header(pkgmeta.package_as or self.source_dir.name)}")
-            print(f"  Externals: {len(pkgmeta.externals)} dependencies")
-            print(f"  Move-folders: {len(pkgmeta.move_folders)} mappings")
         else:
             pkgmeta = PkgMeta(package_as=self.source_dir.name)
-            print(f"  Package: {header(pkgmeta.package_as)} (no .pkgmeta)")
 
         package_name = pkgmeta.package_as or self.source_dir.name
+        version = get_project_version(self.source_dir)
+        status("Building", f"{package_name} {colorize(version, Color.CYAN)}")
 
         # When we have move-folders, the source files go into a package subdirectory
         # and move-folders paths are relative to the staging root
-        if pkgmeta.move_folders:
-            # staging_dir is the root, files go into staging_dir/package_name
-            staging_dir = self.output_dir
-            package_dir = staging_dir / package_name
-        else:
-            # No move-folders, output directly as the package name
-            staging_dir = self.output_dir
-            package_dir = staging_dir / package_name
-
+        staging_dir = self.output_dir
+        package_dir = staging_dir / package_name
         package_dir.mkdir(parents=True, exist_ok=True)
 
         # Fetch externals to the package directory
         if pkgmeta.externals:
             self._fetch_externals(pkgmeta, package_dir)
 
-        # Copy addon files to the package directory
+        # Copy, move, and replace keywords
         self._copy_addon_files(pkgmeta, package_dir)
-
-        # Apply move-folders and get final addon directories
         addon_dirs = self._apply_move_folders(pkgmeta, staging_dir, package_name)
-
-        # Replace keywords in TOC files
-        version = get_project_version(self.source_dir)
-        print(f"\n  Version: {colorize(version, Color.CYAN)}")
         self._replace_keywords(addon_dirs, version)
 
         return addon_dirs
 
     def _fetch_externals(self, pkgmeta: PkgMeta, staging_dir: Path) -> None:
         """Fetch all external dependencies."""
-        print(f"\n{colorize('Fetching externals...', Color.BOLD)}")
+        status("Fetching", f"{len(pkgmeta.externals)} externals", flush=True)
 
         # Group externals by SVN base URL for optimization
         svn_groups: dict[str, list[External]] = {}
@@ -915,14 +899,12 @@ class AddonBuilder:
                     self.cache.get(ext) is not None and not self.force_refresh
                     for ext in group
                 )
-                status = "cached" if all_cached else "fetching"
                 group_names = ", ".join(Path(e.dest_path).name for e in group[:3])
                 if len(group) > 3:
                     group_names += f", ... ({len(group)} total)"
                 print(
-                    f"  {header('SVN group')}: {group_names} ({status})...",
-                    end=" ",
-                    flush=True,
+                    f"{'':>13}{group_names}",
+                    end=" ", flush=True,
                 )
 
                 try:
@@ -937,16 +919,9 @@ class AddonBuilder:
                 other_externals.extend(group)
 
         # Fetch remaining externals individually
-        for i, external in enumerate(other_externals, 1):
+        for external in other_externals:
             lib_name = Path(external.dest_path).name
-            cached = self.cache.get(external) is not None and not self.force_refresh
-
-            status = "cached" if cached else "fetching"
-            print(
-                f"  {counter(f'[{i}/{len(other_externals)}]')} {lib_name} ({status})...",
-                end=" ",
-                flush=True,
-            )
+            print(f"{'':>13}{lib_name}", end=" ", flush=True)
 
             try:
                 dest_path = staging_dir / external.dest_path
@@ -958,7 +933,6 @@ class AddonBuilder:
 
     def _copy_addon_files(self, pkgmeta: PkgMeta, staging_dir: Path) -> None:
         """Copy addon source files, respecting ignore patterns."""
-        print(f"\n{colorize('Copying files...', Color.BOLD)}", end=" ", flush=True)
 
         # Build ignore matcher from .gitignore and .pkgmeta ignore
         gitignore_path = self.source_dir / ".gitignore"
@@ -988,8 +962,6 @@ class AddonBuilder:
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_path, dest_path)
 
-        print(checkmark())
-
     def _apply_move_folders(
         self, pkgmeta: PkgMeta, staging_dir: Path, package_name: str
     ) -> list[Path]:
@@ -1000,9 +972,6 @@ class AddonBuilder:
             # No move-folders, package_dir is the only addon
             return [package_dir]
 
-        print(
-            f"{colorize('Applying move-folders...', Color.BOLD)}", end=" ", flush=True
-        )
 
         # First pass: move all sources to temp locations to avoid conflicts
         temp_moves: list[tuple] = []  # (temp_path, dest_path)
@@ -1036,7 +1005,6 @@ class AddonBuilder:
         if package_dir.exists() and not any(package_dir.iterdir()):
             package_dir.rmdir()
 
-        print(checkmark())
         return addon_dirs
 
     def _cleanup_empty_dirs(self, root: Path) -> None:
@@ -1050,8 +1018,6 @@ class AddonBuilder:
 
     def _replace_keywords(self, addon_dirs: list[Path], version: str) -> None:
         """Replace @keyword@ patterns in TOC files."""
-        print(f"{colorize('Replacing keywords...', Color.BOLD)}", end=" ", flush=True)
-
         replacements = {
             "project-version": version,
         }
@@ -1059,8 +1025,6 @@ class AddonBuilder:
         for addon_dir in addon_dirs:
             for toc_file in addon_dir.rglob("*.toc"):
                 self._replace_in_file(toc_file, replacements)
-
-        print(checkmark())
 
     def _replace_in_file(self, file_path: Path, replacements: dict[str, str]) -> None:
         """Replace @keyword@ patterns in a file."""
@@ -1177,26 +1141,20 @@ def get_target_dirs(
 
 def deploy_addons(addon_dirs: list[Path], target_dirs: list[Path]) -> None:
     """Deploys addons to the target directories."""
-    print(colorize("Deploying addons...", Color.BOLD) + "\n")
+    addon_names = ", ".join(d.name for d in addon_dirs)
+    status("Deploying", f"{addon_names} to {len(target_dirs)} targets", flush=True)
 
-    for i, target_dir in enumerate(target_dirs, 1):
+    for target_dir in target_dirs:
         target_name = target_dir.parent.parent.name.strip("_")
-        print(f"{counter(f'[{i}/{len(target_dirs)}]')} {header(target_name)}:")
+        print(f"{'':>13}{target_name}", end=" ", flush=True)
 
-        for j, addon_dir in enumerate(addon_dirs, 1):
+        for addon_dir in addon_dirs:
             dest_addon_dir = target_dir / addon_dir.name
-            print(
-                f"  {counter(f'[{j}/{len(addon_dirs)}]')} {addon_dir.name}...", end=" "
-            )
-
             if dest_addon_dir.exists():
                 shutil.rmtree(dest_addon_dir)
-
             shutil.copytree(addon_dir, dest_addon_dir)
 
-            print(checkmark())
-
-        print()
+        print(checkmark())
 
 
 def format_size(size_bytes: int) -> str:
@@ -1288,19 +1246,16 @@ def build_and_deploy(
     """Build and deploy addon. Returns True on success."""
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
-            print(colorize("Building addon...", Color.BOLD))
             builder = AddonBuilder(
                 source_dir=source_dir,
                 output_dir=Path(temp_dir),
                 force_refresh=force_refresh,
             )
             addon_dirs = builder.build()
-            print()
             deploy_addons(addon_dirs, target_dirs)
-        print(success("Deployment complete!"))
         return True
     except RuntimeError as e:
-        print(error(str(e)))
+        print_error(str(e))
         return False
 
 
@@ -1321,9 +1276,8 @@ def watch_and_build(
             ignore_matcher = IgnoreMatcher([], source_dir)
 
     # Initial build
-    print(colorize("=== Initial Build ===", Color.BOLD, Color.CYAN))
     if not build_and_deploy(source_dir, target_dirs, force_refresh):
-        print(error("Initial build failed. Watching for changes..."))
+        print_error("Initial build failed. Watching for changes...")
 
     # Set up file watcher
     event_handler = AddonChangeHandler(source_dir, ignore_matcher)
@@ -1331,9 +1285,7 @@ def watch_and_build(
     observer.schedule(event_handler, str(source_dir), recursive=True)
     observer.start()
 
-    print()
-    print(colorize("Watching for changes... (Ctrl+C to stop)", Color.CYAN))
-    print()
+    status("Watching", "for changes... (Ctrl+C to stop)")
 
     try:
         while True:
@@ -1341,22 +1293,13 @@ def watch_and_build(
 
             if event_handler.should_rebuild():
                 print()
-                print(
-                    colorize(
-                        f"=== Rebuild at {time.strftime('%H:%M:%S')} ===",
-                        Color.BOLD,
-                        Color.CYAN,
-                    )
-                )
                 build_and_deploy(source_dir, target_dirs, force_refresh=False)
                 event_handler.reset()
-                print()
-                print(colorize("Watching for changes... (Ctrl+C to stop)", Color.CYAN))
-                print()
+                status("Watching", "for changes... (Ctrl+C to stop)")
 
     except KeyboardInterrupt:
         print()
-        print(colorize("Stopping watcher...", Color.CYAN))
+        status("Stopped", "")
         observer.stop()
 
     observer.join()
@@ -1370,7 +1313,7 @@ def main() -> int:
     # Handle cache management commands
     if args.clear_cache:
         cache.clear_all()
-        print(success("Cache cleared."))
+        status("Cleared", "cache")
         return 0
 
     if args.cache_info:
@@ -1390,24 +1333,20 @@ def main() -> int:
     # Validate WOW_HOME environment
     wow_home_str = os.environ.get("WOW_HOME")
     if not wow_home_str:
-        print(
-            error(
-                "WOW_HOME environment variable not set. Please set it to your World of Warcraft installation directory."
-            )
+        print_error(
+            "WOW_HOME environment variable not set. Please set it to your World of Warcraft installation directory."
         )
         return 1
 
     wow_home = Path(wow_home_str)
     if not wow_home.exists():
-        print(error(f'World of Warcraft directory "{wow_home.absolute()}" not found.'))
+        print_error(f'World of Warcraft directory "{wow_home.absolute()}" not found.')
         return 1
 
     target_dirs = get_target_dirs(wow_home, args.flavor, args.channel)
     if not target_dirs:
-        print(
-            error(
-                "No WoW installations found for the specified flavor/channel combination."
-            )
+        print_error(
+            "No WoW installations found for the specified flavor/channel combination."
         )
         return 1
 
